@@ -1,0 +1,212 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "ZMustaqim"
+date: "October 25, 2015"
+output: html_document
+---
+
+### Executive Summary
+
+Prediction model been built by investigating different algorithms to the original paper titled "10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions", decision trees and random forests were chosen from the most famous algorithms for classification. 
+
+Data cleaning done by removing columns that contained NAs, bad values, zero/near to zero variance or that were irrelevant to the study. This step reduces number of variables to 32 variables that can be used as predictors. 
+
+Using decision trees and random forests algorithms have detected the proper features to use for prediction. 
+
+Due to time constrain while running the computation, 2 repetitions for the 10-fold and 3-fold repeated cross-validation been used to minimized the computation time.
+
+### Setup
+
+Start with load the required packages to be used in the model later
+
+```{r ,warning=FALSE,message=FALSE,results="hide"}
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+Loading data set
+```{r,warning=FALSE}
+set.seed(33) # to ensure the result are reproducible
+trainingDataRaw = read.csv("pml-training.csv")
+testingDataRaw = read.csv("pml-testing.csv")
+
+```
+160 variables at this stage 
+
+### Data Cleaning
+
+Cleaning training and testing data set by removing:
+* Column 1 to 7 due to irrelevant
+* columns with NAs
+```{r}
+trainingDataClean = trainingDataRaw[,colSums(is.na(trainingDataRaw)) == 0]
+no_use = 1:7
+useful = - no_use
+trainingDataClean = trainingDataClean[,useful]
+
+testingDataClean = testingDataRaw[,colSums(is.na(testingDataRaw)) == 0]
+no_use = 1:7
+useful = - no_use
+testingDataClean = testingDataClean[,useful]
+rm(trainingDataRaw, testingDataRaw, no_use, useful)
+
+```
+At this stage:
+
+ - training set : 86 variables
+ - test set     : 53 variables
+ 
+### Data preprocessing
+
+Splitting training dataset into a training set of 75% of the original data and a testing set of the remaining %25. The training portion will be used for training while the second portion is used for adjustments and estimation for out of sample errors.
+
+```{r}
+inTrain = createDataPartition(y=trainingDataClean$classe, p=0.75, list= FALSE)
+training = trainingDataClean[inTrain,]
+testing = trainingDataClean[-inTrain,]
+
+dim(training); dim(testing)
+
+trainingStep = training # Data Alternative A
+trainingStepB = training # Data Alternative B
+rm(training, inTrain)
+```
+At this stage:
+
+ - training setA : 86 variables
+ - training setB : 86 variables
+ - test set      : 53 variables
+
+There are also have variables that have zero or near to zero variance. This variables also will be removed in order to reduce number of possible predictor.
+
+```{r}
+nzv = nearZeroVar(trainingStep, saveMetrics = TRUE)
+trainingNZV = trainingStep[, !nzv$zeroVar & !nzv$nzv ]
+trainingStep = trainingNZV
+dim(trainingNZV)
+rm(nzv, trainingNZV)
+
+nzvB = nearZeroVar(trainingStepB, saveMetrics = TRUE)
+trainingNZVB = trainingStepB[, !nzvB$zeroVar & !nzvB$nzv ]
+trainingStepB = trainingNZVB
+dim(trainingNZVB)
+rm(nzvB, trainingNZVB)
+
+```
+At this stage:
+
+ - training setA : 53 variables
+ - training setB : 53 variables
+ - test set      : 53 variables
+
+Also noticed there are variables with highly correlated. This variables also need to be removed to further reduce redundancy and decrease the number of predictors.
+
+```{r}
+trainingTemp = trainingStep[,-53] #Training setA
+descrCor <- cor(trainingTemp)
+highlyCorrIndices = findCorrelation(descrCor, cutoff = 0.75)
+trainingCor = trainingTemp[,-highlyCorrIndices]
+trainingCor$classe = trainingStep$classe
+trainingStep = trainingCor
+
+trainingTempB = trainingStepB[,-53] #Training setB
+descrCorB <- cor(trainingTempB)
+highlyCorrIndicesB = findCorrelation(descrCorB, cutoff = 0.75)
+trainingCorB = trainingTempB[,-highlyCorrIndicesB]
+trainingCorB$classe = trainingStepB$classe
+trainingStepB = trainingCorB
+
+rm(trainingCor, trainingCorB, trainingTemp, trainingTempB, descrCor, descrCorB, highlyCorrIndices, highlyCorrIndicesB)
+
+```
+At this stage:
+
+ - training setA : 33 variables
+ - training setB : 33 variables
+ - test set      : 53 variables
+
+Then make another 1 more copy for training set for different set of simulation:
+
+ - decision trees without cross-validation (Set A)
+ - decision trees with repeated cross-validation (Set B)
+ - random forests with reapeated cross-validation. (Set C)
+
+```{r}
+trainingSemifinal = trainingStep # set A
+trainingSemifinalB = trainingStepB # Set B
+trainingSemifinalC = trainingStepB # Set C
+
+rm(trainingStep, trainingStepB)
+
+```
+
+### Simulation A (Training using decision trees without cross-validation)
+
+Training Process
+```{r}
+modelFit <- train(classe ~ .,method="rpart",data=trainingSemifinal)
+fancyRpartPlot(modelFit$finalModel, sub = "decision trees with no cross-validation")   
+
+```
+
+```{r}
+predicted = predict(modelFit, newdata=testing)
+confusionMatrix(predicted, testing$classe)
+
+```
+Results showing decision trees without cross validation had low accuracy.
+
+### Simulation B (Training using decision trees with 10-fold cross-validation repeated 2 times)
+
+Training Process
+```{r, message=FALSE, warning=FALSE}
+ctrlB = trainControl(method="repeatedcv", number = 10, repeats = 2)
+modelFitB <- train(classe ~., data = trainingSemifinalB, method="rpart", tuneLength = 15, trControl=ctrlB)
+fancyRpartPlot(modelFitB$finalModel, sub = "decision trees with with 10-fold cross-validation repeated 2 times")
+
+```
+```{r}
+predictedB = predict(modelFitB, newdata=testing)
+confusionMatrix(predictedB, testing$classe)
+
+```
+Result showing decision trees with repeated cross-validation had moderate accuracy. Better than simulation A
+
+### Simulation C (Training using random forests with reapeated cross-validation)
+
+Using repated-cv to 3-fold with 2 repetitions 
+
+```{r, message=FALSE, warning=FALSE}
+ctrlC = trainControl(method="repeatedcv", number = 3, repeats = 2)
+modelFitC <- train(classe ~., data = trainingSemifinalC, method="rf", tuneLength = 2, trControl=ctrlC)
+
+```
+```{r}
+predictedC = predict(modelFitC, newdata=testing)
+confusionMatrix(predictedC, testing$classe)
+
+```
+Result showing random forests with repeated cross-validation has the highest accuracy.
+
+Taking simulation C as a final.
+
+### Writing answer to the file
+
+```{r}
+answers = predict(modelFitC, newdata=testingDataClean)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+
+```
+TQ
